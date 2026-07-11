@@ -1,0 +1,14 @@
+# Sirlər — HEÇ VAXT commit edilməsin
+.env
+
+# Runtime data / media (serverdə yaranır, repo-da saxlanmır)
+segments/
+clips/
+stories/
+logs/
+healthcheck_state.json
+
+# Python
+venv/
+__pycache__/
+*.pyc
