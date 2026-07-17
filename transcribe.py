@@ -7,9 +7,9 @@ from pathlib import Path
 import requests
 
 import config
+import groq_retry
 
-MAX_RETRIES = 3
-RETRY_WAIT_SECONDS = 20
+MAX_RETRIES = groq_retry.MAX_RETRIES
 
 
 def extract_audio(video_path: Path) -> Path:
@@ -47,9 +47,9 @@ def transcribe(video_path: Path) -> dict:
                     },
                     timeout=120,
                 )
-            if response.status_code == 429 and attempt < MAX_RETRIES - 1:
+            if groq_retry.should_retry(response.status_code) and attempt < MAX_RETRIES - 1:
                 last_response = response
-                time.sleep(RETRY_WAIT_SECONDS)
+                time.sleep(groq_retry.wait_seconds(attempt, response))
                 continue
             response.raise_for_status()
             data = response.json()

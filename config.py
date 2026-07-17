@@ -6,6 +6,19 @@ SEGMENTS_DIR = BASE_DIR / "segments"
 CLIPS_DIR = BASE_DIR / "clips"
 LOGS_DIR = BASE_DIR / "logs"
 STORY_DIR = BASE_DIR / "stories"
+HEARTBEAT_DIR = BASE_DIR / "heartbeats"
+
+# 2026-07-16 disk-dolması hadisəsindən sonra əlavə olundu (bax:
+# ~/task_plan.md, "TV Monitor — Dayanıqlılıq Sistemi"). Normalda hər seqment
+# emal olunub silinir, amma emal geriləsə (Groq kvota, şəbəkə problemi və s.)
+# seqmentlər yığılıb diski dolduraraq HƏR ŞEYİ iflic edə bilər. Bu limitdən
+# köhnə seqmentlər emal statusundan asılı olmayaraq silinir ki, disk heç vaxt
+# kritik həddə çatmasın (bax: watcher.py `_purge_stale_segments`).
+SEGMENT_MAX_AGE_SECONDS = 30 * 60  # 30 dəqiqə
+
+# Kanalın emal thread-i (watch_channel) hər dövrədə "heartbeat" yeniləyir.
+# Bundan köhnə heartbeat = thread donub/ölüb sayılır (bax: healthcheck.py).
+HEARTBEAT_STALE_SECONDS = 15 * 60  # 15 dəqiqə
 
 # Live stream sources (HLS). Verify each in VLC before relying on it —
 # these are community-maintained mirrors and can go offline without notice.
@@ -36,82 +49,97 @@ CHANNELS = {
 # Keywords to watch for (case-insensitive). Positive-signal subset of the
 # PRDostu/Quantum ƏƏSMN keyword set — only phrases that typically appear in
 # good-news stories (increases, new services, jobs created, benefits granted).
-# Negative phrases (violations, cuts, crises) and neutral entity names that
-# match both good and bad coverage were intentionally left out, since matched
-# clips are destined for the YouTube channel after Telegram approval.
+# Matching is a plain case-insensitive substring test (transcribe.find_keyword_matches).
+# Azerbaijani is agglutinative — a single stem takes many case/plural/possessive
+# suffixes ("pensiya" -> "pensiyanın", "pensiyaların ödənilməsi", "pensiya artımı").
+# So keywords are the shortest INVARIANT ROOT rather than one fully-inflected form;
+# one root catches every declension as a substring. (Earlier the list held rigid
+# phrases like "pensiya ödənişi", which missed the far more common "pensiyaların
+# ödənilməsi" and let real ƏƏSMN stories slip through unrecorded.)
+#
+# Core institution/entity names (Dövlət Sosial Müdafiə Fondu, the ministry, DMA,
+# DOST) are now INCLUDED even though on their own they are sentiment-neutral: they
+# appear in virtually every relevant story, and two downstream filters keep noise
+# out — classify.py asks an LLM whether the segment is genuinely about ƏƏSMN's
+# areas of work (rejecting coincidental mentions), and every clip still needs
+# manual Telegram approval before it reaches the YouTube channel.
 KEYWORDS = [
-    # Artımlar / ödənişlər
-    "pensiya artımı",
-    "pensiya təyin",
-    "pensiya ödənişi",
-    "əmək haqqının artımı",
-    "əməkhaqqı artırıldı",
-    "əməkhaqqılar artdı",
-    "minimum əməkhaqqı",
+    # ── Qurum / entity adları (əksər ƏƏSMN süjetlərində keçir) ──
+    # ƏƏSMN tabeli qurumlar. Bəziləri aşağıdakı geniş köklərlə də tutulur
+    # (məs. "Dövlət Sosial Müdafiə Fondu"→"sosial müdafiə", "Sosial Xidmətlər
+    # Agentliyi"→"sosial xidmət", "DOST İnklüziv İnkişaf..."→"DOST İnklüziv").
+    "sosial müdafiə",          # "Dövlət Sosial Müdafiə Fondu", "...sosial müdafiəsi", nazirlik adı, "sosial müdafiə naziri"
+    "sosial sığorta",
+    "sosial xidmət",           # "sosial xidmət mərkəzi", "Sosial Xidmətlər Agentliyi"
+    "sosial təminat",          # "Dayanıqlı və Operativ Sosial Təminat Agentliyi" (DOST)
+    "əmək müfəttiş",           # "Dövlət Əmək Müfəttişliyi Xidməti", "əmək müfəttişliyi/müfəttişinin"
+    "tibbi sığorta",           # "Dövlət Tibbi Sığorta və Ekspertiza Agentliyi"
+    "Dövlət Məşğulluq Agentliyi",
+    "DMA",
+    # ── Pensiya / təqaüd ──
+    "pensiya",                 # pensiyaların, pensiyanın, pensiya artımı/təyini/ödənişi, pensiyaçı...
+    "təqaüd",                  # "prezident təqaüdü" və s.
+    # ── Əmək haqqı / maaş ──
+    "əmək haqq",               # "əmək haqqı", "əmək haqqının artımı"
+    "əməkhaqq",                # bitişik yazılış variantı
     "minimum maaş",
-    "minimum əmək pensiyası",
-    "prezident təqaüdü",
-    "sosial islahatlar",
-    # Məşğulluq / yeni iş yerləri
-    "iş yeri açıldı",
-    "iş yeri yaradıldı",
-    "iş yerləri yaradıl",
-    "yeni iş yerləri",
+    "minimum əmək",            # "minimum əmək haqqı", "minimum əmək pensiyası"
+    "maaş artım",
+    "maaş artırıl",
+    # ── Məşğulluq / iş yerləri ──
+    "məşğulluq",               # məşğulluq mərkəzi/xidməti/portalı, məşğulluğun...
+    "işsizlik",                # işsizlik müavinəti, işsizlikdən sığorta
+    "iş yeri",                 # iş yeri açıldı/yaradıldı
+    "iş yerlər",               # iş yerləri yaradıldı, iş yerlərinin
     "iş imkan",
-    "işlə təmin edildi",
+    "işlə təmin",
+    "işə düzəl",               # işə düzəldi, işə düzəlmə
     "özünüməşğulluq",
-    "özünüməşğulluq proqramı",
-    "əmək yarmarkası",
-    "əmək bazarı",
+    "əmək yarmarka",
+    "əmək bazar",
     "iş sərgisi",
-    "peşə hazırlığı kursu",
+    "peşə hazırlığı",
     "peşə kursu",
     "ixtisas kursu",
-    "məşğulluq portalı",
-    "məşğulluq mərkəzi",
-    "məşğulluq xidməti",
-    "vakansiya bazası",
-    "DMA",
-    "Dövlət Məşğulluq Agentliyi",
-    # Müavinətlər / sosial dəstək
-    "sosial yardım",
-    "ünvanlı sosial yardım",
-    "sosial müavinət",
-    "uşaq müavinəti",
-    "körpə müavinəti",
-    "analıq müavinəti",
-    "analıq məzuniyyəti",
-    "birdəfəlik müavinət",
-    "dəfn müavinəti",
-    "işsizlik müavinəti",
-    "işsizlikdən sığorta",
-    "uşağın anadan olmasına görə",
+    "vakansiya",
+    # ── Müavinətlər / sosial dəstək ──
+    "müavinət",                # uşaq/körpə/analıq/dəfn/işsizlik/birdəfəlik müavinəti, müavinətlər...
+    "sosial yardım",           # "ünvanlı sosial yardım" da daxil
+    "sosial dəstək",
+    "uşaq pulu",
+    # "analıq" tək söz kimi SAXLANILMIR — serial/film dialoqlarında adi mənada
+    # ("analıq hissi", "analıq borcu" və s.) tez-tez keçir və yalançı tutma
+    # yaradırdı. Yalnız konkret dövlət müavinəti/məzuniyyəti ifadələri saxlanılır.
+    "analıq məzuniyyət",       # analıq məzuniyyəti/məzuniyyətinin
+    "analıq müavinət",         # analıq müavinəti/müavinətinin
     "çoxuşaqlı ailə",
     "aztəminatlı ailə",
-    "uşaq pulu",
-    # Şəhid ailələri və müharibə iştirakçıları
-    "döyüşçü müavinəti",
-    "döyüşçü pensiyası",
-    # Xidmətlər / reabilitasiya
-    "reabilitasiya xidməti",
+    # ── Şəhid ailələri / veteranlar ──
+    "şəhid ailə",              # şəhid ailələri/ailəsinə
+    "döyüşçü müavinət",
+    "veteran",
+    "müharibə iştirakçı",
+    "qazi",
+    # ── Xidmətlər / reabilitasiya / əlillik ──
+    "əlillik",                 # əlilliyin təyini, əlillik dərəcəsi
+    "reabilitasiya",
     "protez",
-    "protez-ortopedik",
-    "sanatoriya-kurort",
-    "sosial xidmət mərkəzi",
+    "sanatoriya",
     "günərzi",
-    "əlillik təyin",
-    "əlilliyin təyin",
-    # DOST proqramları
-    "DOST mərkəzi",
+    # ── DOST proqramları ──
+    "DOST mərkəz",
     "DOST İnklüziv",
-    "Könüllü DOST proqramı",
+    "DOST modeli",
+    "Könüllü DOST",
     "Qarabağ DOST",
     "Şərqi Zəngəzur DOST",
-    "DOST modeli",
     "inklüziv inkişaf",
-    # Ailə / qayğı
-    "övladlığa götürmə",
+    # ── Ailə / qayğı ──
     "himayədar ailə",
+    "övladlığa",               # övladlığa götürmə
+    "uşaq evi",
+    # ── İslahat ──
+    "sosial islahat",
 ]
 
 SEGMENT_SECONDS = 180  # length of each recorded chunk

@@ -99,17 +99,40 @@ def _take_sample(channel_name: str, stream_url: str, stop_event: threading.Event
     print(f"[{channel_name}] Saatlıq nümunə tamamlandı")
 
 
+RESTART_BACKOFF_MIN_HEALTHY_SECONDS = 30  # ffmpeg must survive at least this long to reset backoff
+RESTART_BACKOFF_MAX_SECONDS = 60
+
+
 def supervise(channel_name: str, stream_url: str, stop_event: threading.Event):
     """Keeps ffmpeg alive for a channel while inside the configured news
     hours. Outside news hours, takes one short sample per channel every
     config.SAMPLE_INTERVAL_SECONDS instead of recording nothing (set that
-    to 0 to fall back to the old "record nothing off-hours" behaviour)."""
+    to 0 to fall back to the old "record nothing off-hours" behaviour).
+
+    If ffmpeg keeps dying almost immediately (e.g. the upstream stream is
+    blocking/rate-limiting reconnects), restarts back off exponentially
+    (capped at RESTART_BACKOFF_MAX_SECONDS) instead of hammering it every
+    10 seconds — repeated rapid reconnects can itself be why a stream
+    starts refusing connections."""
     proc = None
+    proc_started_at = 0.0
+    fail_streak = 0
     next_sample_at = 0.0  # due immediately the first time we go off-hours
     while not stop_event.is_set():
         if _in_news_hours():
             if proc is None or proc.poll() is not None:
+                if proc is not None:
+                    if time.time() - proc_started_at < RESTART_BACKOFF_MIN_HEALTHY_SECONDS:
+                        fail_streak += 1
+                    else:
+                        fail_streak = 0
+                if fail_streak:
+                    backoff = min(RESTART_BACKOFF_MAX_SECONDS, 2 ** fail_streak)
+                    print(f"[{channel_name}] ffmpeg tez-tez uğursuz olur, {backoff}s gözlənilir (ardıcıl uğursuzluq={fail_streak})")
+                    if stop_event.wait(backoff):
+                        break
                 proc = start_recording(channel_name, stream_url)
+                proc_started_at = time.time()
                 if proc is not None:
                     print(f"[{channel_name}] ffmpeg started (pid={proc.pid})")
             time.sleep(10)
@@ -119,6 +142,7 @@ def supervise(channel_name: str, stream_url: str, stop_event: threading.Event):
                 print(f"[{channel_name}] Xəbər saatlarından kənar, qeyd dayandırılır")
                 _stop(proc)
                 proc = None
+                fail_streak = 0  # planlı dayanma uğursuzluq sayılmır
 
             if config.SAMPLE_INTERVAL_SECONDS <= 0:
                 time.sleep(60)
