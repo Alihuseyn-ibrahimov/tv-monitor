@@ -1,3 +1,5 @@
+import json
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -7,6 +9,7 @@ import requests
 import classify
 import clipper
 import config
+import groq_retry
 import story
 import transcribe
 
@@ -17,22 +20,51 @@ def _list_ready_segments(channel_dir: Path) -> list[Path]:
     return files[:-1] if len(files) > 1 else []
 
 
+def _cache_path(segment_path: Path) -> Path:
+    # Uğurlu transkript diskə yazılır ki, classify addımı kvota xətası ilə
+    # uğursuz olanda seqment İTMƏSİN: növbəti dövrədə bahalı transkripsiya
+    # təkrarlanmadan yalnız classify yenidən cəhd edilir.
+    return segment_path.with_suffix(".transcript.json")
+
+
 def _purge_stale_segments(channel_dir: Path, max_age_seconds: int) -> None:
     """Safety valve: normally every segment is deleted right after
     process_segment() handles it (see watch_channel). If processing ever
     falls behind or a segment slips through unprocessed (an unforeseen
     failure mode, not just the one already fixed in process_segment), this
-    caps how long unprocessed segments can accumulate — by TIME, not by
-    disk %, so the disk never has a chance to reach the crisis this was
-    added after (2026-07-16: segments piled up for ~2 days until the disk
-    hit 100% and the whole pipeline seized up)."""
+    caps how long unprocessed segments can accumulate so the disk never
+    reaches the crisis this was added after (2026-07-16: segments piled up
+    for ~2 days until the disk hit 100% and the whole pipeline seized up).
+    2026-07-18: yaş limiti ilə yanaşı disk-əsaslı ikinci qoruyucu əlavə
+    olundu — boş yer DISK_FREE_FLOOR_BYTES-dan aşağı düşsə, yaşından asılı
+    olmayaraq ən köhnə seqmentlər silinir."""
     now = time.time()
     for path in channel_dir.glob("*.mp4"):
         try:
             if now - path.stat().st_mtime > max_age_seconds:
                 path.unlink(missing_ok=True)
+                _cache_path(path).unlink(missing_ok=True)
         except OSError:
             pass
+    # Sahibi silinmiş yetim transkript keşləri (mp4 purge olunub, json qalıb)
+    for cache in channel_dir.glob("*.transcript.json"):
+        try:
+            if not cache.with_suffix("").with_suffix(".mp4").exists():
+                cache.unlink(missing_ok=True)
+        except OSError:
+            pass
+    try:
+        if shutil.disk_usage(channel_dir).free >= config.DISK_FREE_FLOOR_BYTES:
+            return
+        oldest_first = sorted(channel_dir.glob("*.mp4"), key=lambda p: p.stat().st_mtime)
+        # Ən yenisi hələ yazılır — ona toxunma
+        for path in oldest_first[:-1]:
+            path.unlink(missing_ok=True)
+            _cache_path(path).unlink(missing_ok=True)
+            if shutil.disk_usage(channel_dir).free >= config.DISK_FREE_FLOOR_BYTES:
+                break
+    except OSError:
+        pass
 
 
 def _write_heartbeat(channel: str) -> None:
@@ -92,27 +124,58 @@ def notify_all(channel: str, keyword: str, title: str, clip_path: Path, sentimen
     notify_n8n(channel, keyword, title, clip_path, django_clip_id=django_clip_id)
 
 
-def process_segment(channel: str, segment_path: Path):
-    try:
-        transcript = transcribe.transcribe(segment_path)
-    except Exception as e:
-        print(f"[{channel}] transcription failed for {segment_path.name}: {e}")
-        return
+def _is_quota_error(e: Exception) -> bool:
+    """Groq-un keçici (kvota/server) xətası — seqmenti silmək yox, sonra
+    yenidən cəhd etmək lazımdır."""
+    return (
+        isinstance(e, requests.HTTPError)
+        and e.response is not None
+        and e.response.status_code in groq_retry.RETRYABLE_STATUS_CODES
+    )
+
+
+def process_segment(channel: str, segment_path: Path) -> bool:
+    """True = seqmentin işi bitdi (silinə bilər); False = keçici kvota
+    xətası, seqment saxlanılsın və növbəti dövrədə yenidən cəhd edilsin
+    (purge yaş limiti yenə də son sərhəddir)."""
+    # Purge növbədə gözləyən seqmenti silmiş ola bilər — əvvəllər bu hal
+    # ffmpeg "exit status 254" kimi görünüb log-u yanıltırdı (3 gündə 177 dəfə).
+    if not segment_path.exists():
+        return True
+
+    cache = _cache_path(segment_path)
+    transcript = None
+    if cache.exists():
+        try:
+            transcript = json.loads(cache.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            transcript = None
+    if transcript is None:
+        try:
+            transcript = transcribe.transcribe(segment_path)
+        except Exception as e:
+            print(f"[{channel}] transcription failed for {segment_path.name}: {e}")
+            return not _is_quota_error(e)
 
     matches = transcribe.find_keyword_matches(transcript["text"], config.KEYWORDS)
     if not matches:
-        return
+        return True
 
     keyword = matches[0]
+    if not cache.exists():
+        try:
+            cache.write_text(json.dumps(transcript, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
     try:
         result = classify.classify_and_title(transcript["segments"], channel, keyword)
     except Exception as e:
         print(f"[{channel}] AI relevance check failed for {segment_path.name}: {e}")
-        return
+        return not _is_quota_error(e)
 
     if not result["relevant"]:
         print(f"[{channel}] Keyword '{keyword}' matched but AI deemed it unrelated to ƏƏSMN, skipping {segment_path.name}")
-        return
+        return True
 
     print(f"[{channel}] MATCH '{keyword}' (AI-confirmed) in {segment_path.name}: {result['title']} ({result['start']}-{result['end']}s)")
     # clipper/story/notify aşağıda bir dəfə uğursuz olsa belə (məs. disk dolu
@@ -144,6 +207,7 @@ def process_segment(channel: str, segment_path: Path):
             notify_all(channel, finished_run["keyword"], finished_run["title"], finished_run["clip_path"])
     except Exception as e:
         print(f"[{channel}] clip save/notify failed for {segment_path.name}: {e}")
+    return True
 
 
 def watch_channel(channel: str, stop_event: threading.Event, poll_seconds: int = 15):
@@ -155,12 +219,16 @@ def watch_channel(channel: str, stop_event: threading.Event, poll_seconds: int =
         _purge_stale_segments(channel_dir, config.SEGMENT_MAX_AGE_SECONDS)
 
         for segment_path in _list_ready_segments(channel_dir):
-            process_segment(channel, segment_path)
+            done = process_segment(channel, segment_path)
             # Any matching clip was already copied out by clipper.save_clip
             # above, so the raw segment can be freed immediately — recordings
             # are large (100-200MB per 3-min chunk) and would otherwise fill
-            # the disk within hours across 6 channels.
-            segment_path.unlink(missing_ok=True)
+            # the disk within hours across 6 channels. Keçici kvota xətasında
+            # (done=False) seqment və transkript keşi saxlanılır ki, növbəti
+            # dövrədə yenidən cəhd olunsun.
+            if done:
+                segment_path.unlink(missing_ok=True)
+                _cache_path(segment_path).unlink(missing_ok=True)
             # A single segment can block here for minutes (Groq 429 retry
             # backoff — see groq_retry.py). If the backlog is long, waiting
             # until the whole for-loop finishes to purge (as this used to)

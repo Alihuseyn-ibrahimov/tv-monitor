@@ -14,7 +14,17 @@ HEARTBEAT_DIR = BASE_DIR / "heartbeats"
 # seqmentlər yığılıb diski dolduraraq HƏR ŞEYİ iflic edə bilər. Bu limitdən
 # köhnə seqmentlər emal statusundan asılı olmayaraq silinir ki, disk heç vaxt
 # kritik həddə çatmasın (bax: watcher.py `_purge_stale_segments`).
-SEGMENT_MAX_AGE_SECONDS = 30 * 60  # 30 dəqiqə
+# 2026-07-18: 30 dəq → 60 dəq. Kvota darboğazında növbə 30 dəqiqədən çox
+# geriləyəndə seqmentlər kütləvi şəkildə emala çatmadan silinirdi (günlərlə
+# 0 süjet). Transkripsiya tutumu 3× artırıldığından (bax: transcribe.py)
+# 60 dəqiqəlik backlog ~13GB-dan çox olmur; disk üçün əlavə təhlükəsizlik
+# watcher.py-dəki DISK_FREE_FLOOR qoruyucusudur.
+SEGMENT_MAX_AGE_SECONDS = 60 * 60  # 60 dəqiqə
+
+# Disk üzərində minimum boş yer (bayt). Bundan aşağı düşəndə purge yaş
+# limitini gözləmədən ən köhnə seqmentləri silir (2026-07-16 disk-dolması
+# hadisəsinin təkrarlanmaması üçün ikinci, disk-əsaslı qoruyucu).
+DISK_FREE_FLOOR_BYTES = 5 * 1024**3  # 5 GB
 
 # Kanalın emal thread-i (watch_channel) hər dövrədə "heartbeat" yeniləyir.
 # Bundan köhnə heartbeat = thread donub/ölüb sayılır (bax: healthcheck.py).
@@ -162,7 +172,11 @@ SAMPLE_MARGIN_SECONDS = 10  # small buffer so the segment file fully closes
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
-GROQ_MODEL = "whisper-large-v3"
+# Hər modelin Groq-da AYRICA pulsuz kvota hovuzu var (saatda 7200
+# audio-saniyə + gündə 2000 sorğu). transcribe.py sorğuları iki hovuz
+# arasında növbələşdirir — birləşmiş tutum ikiqat olur. 1.5× audioda hər
+# iki modelin keyfiyyəti real seqmentdə müqayisə edilib: fərq cüzidir.
+GROQ_MODELS = ["whisper-large-v3", "whisper-large-v3-turbo"]
 
 N8N_WEBHOOK_URL = "https://n8n.mediapulse.az/webhook/tv-clip-approval"
 
