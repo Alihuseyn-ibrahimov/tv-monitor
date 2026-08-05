@@ -93,7 +93,17 @@ def transcribe(video_path: Path) -> dict:
         audio_path.unlink(missing_ok=True)
 
 
+def _az_lower(text: str) -> str:
+    """str.lower() turns Azerbaijani/Turkish 'İ' (U+0130) into 'i' + a
+    combining dot above (U+0307), so "İşsizlik".lower() no longer contains
+    plain "işsizlik" and keyword checks silently miss it. Same bug found
+    and fixed in agent.py's normalize() on 2026-07-27; ported here on
+    2026-08-05 after it was caught missing "işsiz" in a sentence-initial
+    "İşsizlik...". Strip the combining dot after lowering."""
+    return text.lower().replace("̇", "")
+
+
 def find_keyword_matches(transcript_text: str, keywords: list[str]) -> list[str]:
     """Returns the list of keywords (from `keywords`) found in the transcript."""
-    text_lower = transcript_text.lower()
-    return [kw for kw in keywords if kw.lower() in text_lower]
+    text_lower = _az_lower(transcript_text)
+    return [kw for kw in keywords if _az_lower(kw) in text_lower]
