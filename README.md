@@ -25,6 +25,50 @@ watcher.py    → əvvəl Django-ya ingest edir (POST /landing-admin/tv-clips/in
 Təsdiq/yükləmə n8n workflow-larında baş verir (Hetzner-də self-hosted n8n, Docker) —
 o hissə bu repo-da deyil.
 
+## n8n tərəfi (eyni VPS, eyni n8n konteyneri)
+
+n8n iki domenlə açılır (Caddy → `localhost:5678`): `n8n.mediapulse.az` və
+`n8n.prdostu.com`. n8n-in qlobal `WEBHOOK_URL`-i **prdostu**-dadır (digər layihələr
+üçün), amma **TV axınının hamısı `n8n.mediapulse.az` üzərindən işləyir**:
+
+| Workflow | Giriş nöqtəsi | Kim çağırır |
+|---|---|---|
+| `TV Sujet İzləmə - Təsdiq və YouTube Yükləmə` | `POST /webhook/tv-clip-approval` | `watcher.py` |
+| `TV Klip - Telegram Təsdiq Emalı` | `POST /webhook/tv-clip-telegram-callback` | Telegram (`tv_monitorinq_bot` düymələri) |
+| `TV Klip - Telegram Təsdiq Emalı` | `POST /webhook/tv-clip-web-decision` | Django (`saas_core/monitor/views.py`) |
+
+**Telegram trigger node-u qəsdən İŞLƏDİLMİR** (2026-10-16): n8n trigger-i botu
+qlobal `WEBHOOK_URL`-ə (prdostu) bağlayırdı. Əvəzində adi Webhook node-u var,
+bot isə əl ilə bağlanıb:
+
+```bash
+# /root/tv-monitor/.env: TELEGRAM_BOT_TOKEN, TG_CALLBACK_SECRET
+curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+  --data-urlencode "url=https://n8n.mediapulse.az/webhook/tv-clip-telegram-callback" \
+  --data-urlencode "secret_token=${TG_CALLBACK_SECRET}" \
+  --data-urlencode 'allowed_updates=["callback_query"]'
+```
+
+Webhook node-u yalnız `X-Telegram-Bot-Api-Secret-Token` başlığı
+`TG_CALLBACK_SECRET`-ə bərabər olanda icra yaradır (`onlyRunIf`). Eyni bota başqa
+workflow-da Telegram trigger qoşma — bir botun yalnız bir webhook-u olur və TV
+düymələri səssizcə işləməz olur (2026-09-də "Mağaza Telegram Agenti" məhz bunu
+etmişdi, arxivləndi).
+
+## Servis və healthcheck (serverdə)
+
+- `tv-monitor.service` — `enable` edilib (reboot-dan sonra özü qalxır) +
+  `/etc/systemd/system/tv-monitor.service.d/restart.conf`-da `Restart=always`
+  (proses təmiz çıxsa belə yenidən qalxır; `systemctl stop` hələ də işləyir).
+- Healthcheck cron-u **`/etc/cron.d/tv-monitor`**-dadır (`*/5`), root crontab-da
+  deyil — başqa layihənin `crontab fayl` əmri onu silə bilməsin.
+
+> **2026-08-11 → 2026-10-16 hadisəsi:** proses təmiz çıxdı (kod 0), `Restart=on-failure`
+> qaldırmadı, servis `disabled` idi; healthcheck yalnız bir dəfə xəbərdarlıq edib
+> susdu, 2026-10-12-də isə `ai_trader` quraşdırılarkən root crontab üstündən yazılıb
+> healthcheck sətri itdi. ~2 ay heç bir kanal izlənmədi. Yuxarıdakı iki dəyişiklik
+> bunun təkrarlanmaması üçündür.
+
 ## Fayllar
 
 | Fayl | Rol |
