@@ -178,7 +178,14 @@ GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 # iki modelin keyfiyyəti real seqmentdə müqayisə edilib: fərq cüzidir.
 GROQ_MODELS = ["whisper-large-v3", "whisper-large-v3-turbo"]
 
-N8N_WEBHOOK_URL = "https://n8n.mediapulse.az/webhook/tv-clip-approval"
+# Süjetin ƏƏSMN-ə aidiyyətini yoxlayan + başlıq yazan LLM (classify.py).
+# 2026-10-16: Groq `llama-3.3-70b-versatile`-i götürdü — hər sorğu 404 aldı və
+# tapılan bütün süjetlər səssizcə itdi. Model indi .env-dən dəyişdirilə bilir
+# (GROQ_CLASSIFY_MODEL) ki, növbəti köhnəlmədə kod dəyişmədən keçid edilsin.
+# Mövcud modellər: GET https://api.groq.com/openai/v1/models
+CLASSIFY_MODEL = os.environ.get("GROQ_CLASSIFY_MODEL", "openai/gpt-oss-120b")
+
+N8N_WEBHOOK_URL ="https://n8n.mediapulse.az/webhook/tv-clip-approval"
 
 CLIP_SERVER_PORT = 8787
 # Reachable via Caddy (reverse proxy + auto-HTTPS) on the VPS, routing

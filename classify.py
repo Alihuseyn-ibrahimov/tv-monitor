@@ -7,7 +7,6 @@ import config
 import groq_retry
 
 CLASSIFY_URL = "https://api.groq.com/openai/v1/chat/completions"
-CLASSIFY_MODEL = "llama-3.3-70b-versatile"
 
 RELEVANT_TOPICS = (
     "pensiyalar, sosial müavinətlər, əmək haqqı, işsizlik və məşğulluq, "
@@ -111,7 +110,7 @@ relevant=false olarsa, "title" boş sətir, "start" və "end" 0 olsun.
             CLASSIFY_URL,
             headers={"Authorization": f"Bearer {config.GROQ_API_KEY}"},
             json={
-                "model": CLASSIFY_MODEL,
+                "model": config.CLASSIFY_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
                 "response_format": {"type": "json_object"},
                 "temperature": 0.3,

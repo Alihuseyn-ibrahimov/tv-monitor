@@ -24,6 +24,9 @@ DISK_FREE_MIN_PERCENT = 10
 # günlərlə iflic vəziyyəti yaranmasın.
 DISK_EMERGENCY_FREE_PERCENT = 5
 EXPECTED_WEBHOOK_HOST = "n8n.mediapulse.az"
+# Kvota (429) xətaları watcher-də təkrar cəhd olunur və bura düşmür; 3+ uğursuz
+# klassifikasiya adətən daimi problemdir (model silinib, açar etibarsızdır).
+CLASSIFY_FAILURE_THRESHOLD = 3
 
 
 def send_telegram(text: str):
@@ -100,13 +103,29 @@ def emergency_cleanup_segments() -> int:
     return freed
 
 
-def check_restart_loops() -> dict[str, int]:
+def _journal_since(minutes: int) -> str:
     result = subprocess.run(
-        ["journalctl", "-u", "tv-monitor", "--no-pager", f"--since=-{LOOKBACK_MINUTES}min"],
+        ["journalctl", "-u", "tv-monitor", "--no-pager", f"--since=-{minutes}min"],
         capture_output=True, text=True,
     )
+    return result.stdout
+
+
+def count_classify_failures(log_text: str) -> int:
+    return sum(1 for line in log_text.splitlines() if "AI relevance check failed" in line)
+
+
+def check_classify_failures() -> int:
+    """2026-10-16: classify.py-nin modeli Groq-da silinmişdi — hər açar söz
+    uyğunluğu 404 ilə uğursuz olub seqment silinirdi, yəni bütün süjetlər
+    itirdi, amma heç bir xəbərdarlıq yox idi (servis "sağlam" görünürdü).
+    Qayıdan dəyər: LOOKBACK_MINUTES ərzində uğursuz klassifikasiya sayı."""
+    return count_classify_failures(_journal_since(LOOKBACK_MINUTES))
+
+
+def check_restart_loops() -> dict[str, int]:
     counts: dict[str, int] = {}
-    for line in result.stdout.splitlines():
+    for line in _journal_since(LOOKBACK_MINUTES).splitlines():
         if "ffmpeg started" not in line:
             continue
         m = re.search(r"\[(\w+)\] ffmpeg started", line)
@@ -201,6 +220,14 @@ def collect_problems() -> dict[str, str]:
     else:
         for channel, minutes in dead.items():
             problems[f"channel_dead:{channel}"] = f"{channel}: {minutes:.0f} dəqiqədir heç bir fəaliyyət yoxdur"
+
+    classify_failures = check_classify_failures()
+    if classify_failures >= CLASSIFY_FAILURE_THRESHOLD:
+        problems["classify_failing"] = (
+            f"AI klassifikasiyası son {LOOKBACK_MINUTES} dəqiqədə {classify_failures} dəfə "
+            f"uğursuz oldu — tapılan süjetlər İTİR (model: {config.CLASSIFY_MODEL}; "
+            "journalctl -u tv-monitor | grep 'AI relevance')"
+        )
 
     if not check_telegram_webhook_ok():
         problems["webhook_wrong"] = "Telegram webhook VPS-ə deyil, başqa bir yerə qeydiyyatlıdır!"

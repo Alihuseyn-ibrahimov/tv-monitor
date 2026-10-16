@@ -84,6 +84,7 @@ etmişdi, arxivləndi).
 | `story.py` | Süjet (mətn) emalı |
 | `healthcheck.py` | Sistem sağlamlığı + Telegram xəbərdarlıq |
 | `run_healthcheck.sh` | Healthcheck üçün cron wrapper |
+| `test_tv_monitor.py` | Şəbəkəsiz testlər: `venv/bin/python -m unittest test_tv_monitor -v` |
 
 ## Mühit dəyişənləri
 
