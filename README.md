@@ -1,3 +1,21 @@
+# TV Monitor → YouTube Pipeline
+
+A system that monitors Azerbaijani TV channels 24/7. When a news segment matches the client's keywords, it cuts a clip, asks for approval in Telegram and publishes the approved clip to YouTube.
+
+## How it works
+1. **Record** — captures each channel's HLS stream during news hours (`recorder.py`)
+2. **Transcribe** — converts audio to text with Groq Whisper (`transcribe.py`)
+3. **Classify** — checks the transcript against the keyword list with an LLM (`classify.py`)
+4. **Clip** — cuts the matching segment (`clipper.py`)
+5. **Approve & publish** — sends the clip to the MediaPulse dashboard and to Telegram for approval; approved clips are uploaded to YouTube via n8n workflows
+
+## Tech stack
+Python · ffmpeg · Groq Whisper · LLM classification · Telegram Bot API · n8n · Django integration
+
+---
+
+## Azərbaycan dilində
+
 # TV Monitorinq → YouTube Pipeline
 
 Azərbaycan TV kanallarını 7/24 izləyən, açar sözlərə uyğun süjet tapanda klip kəsib
