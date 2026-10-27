@@ -22,7 +22,7 @@ Azərbaycan TV kanallarını 7/24 izləyən, açar sözlərə uyğun süjet tapa
 Telegram-da təsdiq alaraq YouTube-a yükləyən sistem.
 
 > ⚠️ **Bu qovluq serverdə işləyən kodun repo nüsxəsidir.** İşlək sistem ayrı bir
-> **Hetzner VPS-də** (`root@91.99.149.63:/root/tv-monitor/`) `tv-monitor.service`
+> **Hetzner VPS-də** (`root@<SERVER_IP>:/root/tv-monitor/`) `tv-monitor.service`
 > (systemd) altında işləyir. Buradakı fayllar versiya nəzarəti + backup üçündür;
 > dəyişiklik serverə `scp` ilə köçürülüb servis restart edilməlidir.
 
